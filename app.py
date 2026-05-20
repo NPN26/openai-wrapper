@@ -6,6 +6,16 @@ import streamlit as st
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
+def get_available_models(key: str) -> list[str]:
+    response = requests.get(
+        f"{OPENAI_BASE_URL}/models",
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return [model.get("id", "") for model in payload.get("data", [])]
+
 st.set_page_config(page_title="OpenAI Wrapper", page_icon="OpenAI Wrapper", layout="centered")
 
 st.title("OpenAI API Wrapper")
@@ -13,6 +23,18 @@ st.write("Use this like a normal chat. Add an OpenAI API key in the sidebar to s
 
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = ""
+
+if "validated_api_key" not in st.session_state:
+    st.session_state.validated_api_key = ""
+
+if "api_key_valid" not in st.session_state:
+    st.session_state.api_key_valid = False
+
+if "available_models" not in st.session_state:
+    st.session_state.available_models = []
+
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = DEFAULT_MODEL
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
@@ -29,15 +51,33 @@ with st.sidebar:
     )
     st.session_state.openai_api_key = api_key.strip()
 
-    model = st.text_input("Model", value=DEFAULT_MODEL)
+    if st.session_state.openai_api_key != st.session_state.validated_api_key:
+        st.session_state.api_key_valid = False
+        st.session_state.available_models = []
+
     test_key = st.button("Validate key")
+
+    if st.session_state.api_key_valid and st.session_state.available_models:
+        selected_model = st.selectbox(
+            "Model",
+            options=st.session_state.available_models,
+            index=st.session_state.available_models.index(st.session_state.selected_model)
+            if st.session_state.selected_model in st.session_state.available_models
+            else 0,
+            help="Select the OpenAI model to use.",
+        )
+        st.session_state.selected_model = selected_model
+    else:
+        st.session_state.selected_model = st.text_input("Model", value=st.session_state.selected_model, help="Enter a model name. Validate the key to load the model list.")
+
+    if st.session_state.api_key_valid:
+        st.caption(f"{len(st.session_state.available_models)} models available after validation.")
 
     if st.button("Clear chat"):
         st.session_state.messages = [
             {"role": "assistant", "content": "Chat cleared. Send a new message when you're ready."}
         ]
         st.rerun()
-
 
 def call_openai(prompt: str, key: str, selected_model: str) -> str:
     response = requests.post(
@@ -102,8 +142,30 @@ if test_key:
     else:
         is_valid, message = validate_key(st.session_state.openai_api_key)
         if is_valid:
+            st.session_state.validated_api_key = st.session_state.openai_api_key
+            st.session_state.api_key_valid = True
+            try:
+                st.session_state.available_models = [
+                    model_id
+                    for model_id in get_available_models(st.session_state.openai_api_key)
+                    if model_id
+                ]
+            except requests.RequestException as exc:
+                st.session_state.api_key_valid = False
+                st.session_state.available_models = []
+                st.error(f"Could not load model list: {exc}")
+            else:
+                if st.session_state.selected_model not in st.session_state.available_models:
+                    st.session_state.selected_model = (
+                        st.session_state.available_models[0]
+                        if st.session_state.available_models
+                        else DEFAULT_MODEL
+                    )
             st.success(message)
         else:
+            st.session_state.validated_api_key = ""
+            st.session_state.api_key_valid = False
+            st.session_state.available_models = []
             st.error(message)
 
 for message in st.session_state.messages:
@@ -126,7 +188,7 @@ if prompt:
                     st.stop()
 
                 chat_prompt = build_chat_prompt(st.session_state.messages)
-                result = call_openai(chat_prompt, st.session_state.openai_api_key, model.strip() or DEFAULT_MODEL)
+                result = call_openai(chat_prompt, st.session_state.openai_api_key, st.session_state.selected_model or DEFAULT_MODEL)
 
                 st.write(result)
                 st.session_state.messages.append({"role": "assistant", "content": result})
