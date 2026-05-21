@@ -3,7 +3,7 @@ import os
 import requests
 import streamlit as st
 
-OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 def get_available_models(key: str) -> list[str]:
@@ -36,6 +36,9 @@ if "available_models" not in st.session_state:
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL
 
+if "openai_base_url" not in st.session_state:
+    st.session_state.openai_base_url = OPENAI_BASE_URL
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "Hi. Send a message and I’ll reply like a normal chat."}
@@ -43,6 +46,15 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.header("Connection")
+    st.subheader("Endpoint")
+    base_url = st.text_input(
+        "OpenAI Base URL",
+        value=st.session_state.openai_base_url,
+        help="Custom OpenAI API base URL (e.g. https://api.openai.com/v1 or an enterprise endpoint).",
+    )
+    st.session_state.openai_base_url = base_url.strip() or OPENAI_BASE_URL
+    # update module-level base URL so helper functions use the configured endpoint
+    OPENAI_BASE_URL = st.session_state.openai_base_url
     api_key = st.text_input(
         "OpenAI API key",
         type="password",
