@@ -1,16 +1,36 @@
 import os
 import tempfile
 from pathlib import Path
+import re
+import requests
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 import streamlit as st
+import openai
 
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
+
+def check_api_key(api_key: str, base_url: str = OPENAI_BASE_URL) -> bool:
+    try:
+        if base_url != "https://api.openai.com/v1":
+            response = requests.get(
+                base_url,
+                headers={"api-key": api_key}
+            )
+            return response.status_code != 401
+        else:
+            response = requests.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"}
+            )
+            return response.status_code != 401
+    except requests.RequestException:
+        return False
 
 def build_chat_model(api_key: str, model_name: str):
     return init_chat_model(
@@ -158,14 +178,10 @@ with st.sidebar:
 
 def validate_key(key: str) -> tuple[bool, str]:
     try:
-        model = build_chat_model(key, st.session_state.selected_model or DEFAULT_MODEL)
-        model.invoke(
-            [
-                SystemMessage(content="You are a helpful chat assistant. Reply naturally and keep the conversation going."),
-                HumanMessage(content="ping"),
-            ]
-        )
-        return True, "Key validated successfully."
+        if check_api_key(key, OPENAI_BASE_URL):
+            return True, "Key is valid for the configured endpoint."
+        else:
+            return False, "Key is invalid for the configured endpoint."
     except Exception as exc:
         detail = str(exc)
         if "Malformed identifier" in detail:
