@@ -14,11 +14,12 @@ from langgraph.graph import START, StateGraph, END
 from psycopg import Connection
 import streamlit as st
 
-load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
-
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
-DB_URI = os.getenv("POSTGRES_URI")
+os.environ["LANGSMITH_TRACING"] = st.secrets["LANGSMITH_TRACING"]
+os.environ["LANGSMITH_API_KEY"] = st.secrets["LANGSMITH_API_KEY"]
+os.environ["LANGSMITH_ENDPOINT"] = st.secrets["LANGSMITH_ENDPOINT"]
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-4.1"
+DB_URI = st.secrets["POSTGRES_URI"]
 SYSTEM_PROMPT = "You are a helpful chat assistant. Reply naturally and keep the conversation going."
 
 class State(TypedDict):
