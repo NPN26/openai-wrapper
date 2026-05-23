@@ -194,8 +194,11 @@ config: RunnableConfig = {
     }
 }
 graph = get_graph()
-snapshot = graph.get_state(config)
-prior_messages = snapshot.values.get("messages", [])
+try:
+    snapshot = graph.get_state(config)
+    prior_messages = snapshot.values.get("messages", [])
+except Exception:
+    prior_messages = []
             
 for msg in prior_messages:
     if isinstance(msg, HumanMessage):
