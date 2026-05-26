@@ -50,10 +50,32 @@ def require_db_uri() -> str:
 
 @st.cache_resource
 def get_graph():
-    conn = Connection.connect(require_db_uri(), autocommit=True)
-    checkpointer = PostgresSaver(conn)
-    checkpointer.setup()
-    return builder.compile(checkpointer=checkpointer)
+    try:
+        conn = Connection.connect(require_db_uri(), autocommit=True)
+        # Set connection timeout and keepalive
+        conn.timeout = 30
+        checkpointer = PostgresSaver(conn)
+        checkpointer.setup()
+        return builder.compile(checkpointer=checkpointer)
+    except Exception as e:
+        st.error(f"Failed to connect to database: {str(e)}")
+        st.stop()
+
+def get_graph_with_retry():
+    """Get graph with connection retry logic"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            graph = get_graph()
+            # Test the connection
+            graph.get_state({"configurable": {"thread_id": "test"}})
+            return graph
+        except Exception as e:
+            if attempt < max_retries - 1:
+                st.warning(f"Connection attempt {attempt + 1} failed, retrying...")
+                st.cache_resource.clear()
+            else:
+                raise
 
 
 def response_to_text(response) -> str:
@@ -231,7 +253,12 @@ config: RunnableConfig = {
         "base_url": st.session_state.openai_base_url or OPENAI_BASE_URL,
     }
 }
-graph = get_graph()
+try:
+    graph = get_graph_with_retry()
+except Exception as e:
+    st.error(f"Could not establish database connection: {str(e)}")
+    st.stop()
+
 try:
     snapshot = graph.get_state(config)
     prior_messages = snapshot.values.get("messages", [])
@@ -263,14 +290,26 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                # Fix: just pass the new message — don't manually append to state
-                result_state = graph.invoke(
-                    {"messages": [HumanMessage(content=prompt)]},
-                    config=config
-                )
-                st.write(response_to_text(result_state["messages"][-1]))  # fix: result_state not result
+                # Retry logic for connection issues
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        result_state = graph.invoke(
+                            {"messages": [HumanMessage(content=prompt)]},
+                            config=config
+                        )
+                        st.write(response_to_text(result_state["messages"][-1]))
+                        break
+                    except Exception as e:
+                        if "connection" in str(e).lower() and attempt < max_retries - 1:
+                            st.cache_resource.clear()
+                            graph = get_graph_with_retry()
+                        else:
+                            raise
             except Exception as exc:
                 error_detail = str(exc)
                 if "Malformed identifier" in error_detail:
                     error_detail += " Use the Azure deployment name in the Model field, not the underlying model name."
+                elif "connection" in error_detail.lower():
+                    error_detail = "Database connection lost. Please try again. If this persists, check your POSTGRES_URI."
                 st.error(f"Request failed: {error_detail}")
