@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import START, StateGraph, END
+from langgraph.graph.message import add_messages
 from psycopg import Connection
 import streamlit as st
 
@@ -23,7 +24,7 @@ DB_URI = st.secrets["POSTGRES_URI"]
 SYSTEM_PROMPT = "You are a helpful chat assistant. Reply naturally and keep the conversation going."
 
 class State(TypedDict):
-    messages: Annotated[list[AIMessage | HumanMessage], operator.add]
+    messages: Annotated[list[AIMessage | HumanMessage], add_messages]
     
 model = init_chat_model(
     temperature=0.5,
@@ -74,7 +75,7 @@ def response_to_text(response) -> str:
 st.set_page_config(page_title="OpenAI Wrapper", page_icon="OpenAI Wrapper", layout="centered")
 
 st.title("OpenAI API Wrapper")
-st.write("Use this like a normal chat. Add an OpenAI API key in the sidebar to start.")
+st.write("Set your endpoint and API key below, validate once, then start chatting.")
 
 if not DB_URI:
     st.error("POSTGRES_URI is not set. Configure your cloud Postgres connection string to enable persistent chat memory.")
@@ -98,48 +99,22 @@ if "openai_base_url" not in st.session_state:
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid4())
 
-with st.sidebar:
-    st.header("Connection")
-    st.subheader("Endpoint")
-    base_url = st.text_input(
-        "OpenAI Base URL",
-        value=st.session_state.openai_base_url,
-        help="Custom OpenAI API base URL (e.g. https://api.openai.com/v1 or an enterprise endpoint).",
-    )
-    st.session_state.openai_base_url = base_url.strip() or OPENAI_BASE_URL
-    OPENAI_BASE_URL = st.session_state.openai_base_url
-    api_key = st.text_input(
-        "OpenAI API key",
-        type="password",
-        value=st.session_state.openai_api_key,
-        placeholder="sk-...",
-    )
-    st.session_state.openai_api_key = api_key.strip()
+if "thread_history" not in st.session_state:
+    st.session_state.thread_history = {st.session_state.thread_id: "Chat 1"}
 
-    if st.session_state.openai_api_key != st.session_state.validated_api_key:
-        st.session_state.api_key_valid = False
+if "thread_order" not in st.session_state:
+    st.session_state.thread_order = [st.session_state.thread_id]
 
-    test_key = st.button("Validate key")
+if "show_connection_section" not in st.session_state:
+    st.session_state.show_connection_section = True
 
-    st.session_state.selected_model = st.text_input(
-        "Model / deployment",
-        value=st.session_state.selected_model,
-        help="For Azure endpoints, enter the deployment name, not the underlying model name.",
-    )
 
-    if st.session_state.api_key_valid:
-        st.caption("Key validated against the configured endpoint.")
+def register_thread(thread_id: str) -> None:
+    if thread_id not in st.session_state.thread_history:
+        label = f"Chat {len(st.session_state.thread_history) + 1}"
+        st.session_state.thread_history[thread_id] = label
+        st.session_state.thread_order.insert(0, thread_id)
 
-    if st.button("Clear chat"):
-        st.session_state.thread_id = str(uuid4())
-        st.session_state.messages = [
-            {"role": "assistant", "content": "Chat cleared. Send a new message when you're ready."}
-        ]
-        st.rerun()
-
-    st.subheader("Session Thread")
-    st.caption(st.session_state.thread_id)
-    
 def check_api_key(api_key: str, base_url: str = OPENAI_BASE_URL) -> bool:
     try:
         if base_url != "https://api.openai.com/v1":
@@ -159,7 +134,7 @@ def check_api_key(api_key: str, base_url: str = OPENAI_BASE_URL) -> bool:
 
 def validate_key(key: str) -> tuple[bool, str]:
     try:
-        if check_api_key(key, OPENAI_BASE_URL):
+        if check_api_key(key, st.session_state.openai_base_url or OPENAI_BASE_URL):
             return True, "Key is valid for the configured endpoint."
         else:
             return False, "Key is invalid for the configured endpoint."
@@ -172,6 +147,66 @@ def validate_key(key: str) -> tuple[bool, str]:
             )
         return False, f"Key validation failed: {detail}"
 
+
+if not st.session_state.api_key_valid:
+    st.session_state.show_connection_section = True
+
+test_key = False
+if st.session_state.show_connection_section:
+    st.subheader("Connection")
+    st.session_state.openai_base_url = (
+        st.text_input(
+            "OpenAI Base URL",
+            value=st.session_state.openai_base_url,
+            help="Custom OpenAI API base URL (e.g. https://api.openai.com/v1 or an enterprise endpoint).",
+        ).strip()
+        or OPENAI_BASE_URL
+    )
+
+    st.session_state.openai_api_key = st.text_input(
+        "OpenAI API key",
+        type="password",
+        value=st.session_state.openai_api_key,
+        placeholder="sk-...",
+    ).strip()
+
+    st.session_state.selected_model = st.text_input(
+        "Model / deployment",
+        value=st.session_state.selected_model,
+        help="For Azure endpoints, enter the deployment name, not the underlying model name.",
+    )
+
+    if st.session_state.openai_api_key != st.session_state.validated_api_key:
+        st.session_state.api_key_valid = False
+
+    test_key = st.button("Validate key")
+else:
+    st.success("Key validated. You can start chatting.")
+    if st.button("Change connection settings"):
+        st.session_state.show_connection_section = True
+        st.rerun()
+
+if st.button("Start new chat"):
+    st.session_state.thread_id = str(uuid4())
+    register_thread(st.session_state.thread_id)
+    st.rerun()
+
+with st.sidebar:
+    st.header("Past chats")
+    register_thread(st.session_state.thread_id)
+    selected_thread = st.radio(
+        "Saved threads",
+        options=st.session_state.thread_order,
+        index=st.session_state.thread_order.index(st.session_state.thread_id),
+        format_func=lambda thread: f"{st.session_state.thread_history.get(thread, 'Chat')} ({thread[:8]})",
+    )
+
+    if selected_thread != st.session_state.thread_id:
+        st.session_state.thread_id = selected_thread
+        st.rerun()
+
+    st.caption(f"Current thread: {st.session_state.thread_id}")
+
 if test_key:
     if not st.session_state.openai_api_key:
         st.error("Enter an API key first.")
@@ -180,7 +215,9 @@ if test_key:
         if is_valid:
             st.session_state.validated_api_key = st.session_state.openai_api_key
             st.session_state.api_key_valid = True
+            st.session_state.show_connection_section = False
             st.success(message)
+            st.rerun()
         else:
             st.session_state.validated_api_key = ""
             st.session_state.api_key_valid = False
@@ -207,11 +244,18 @@ for msg in prior_messages:
     elif isinstance(msg, AIMessage):
         st.chat_message("assistant").write(response_to_text(msg))
 
-prompt = st.chat_input("Send a message")
+if not st.session_state.api_key_valid:
+    st.info("Validate your API key to enable chat input.")
+
+prompt = st.chat_input("Send a message", disabled=not st.session_state.api_key_valid)
 
 if prompt:
     if not st.session_state.openai_api_key:
-        st.error("Add an OpenAI API key in the sidebar.")
+        st.error("Add an OpenAI API key in the connection section above.")
+        st.stop()
+
+    if not st.session_state.api_key_valid:
+        st.error("Validate your API key before sending messages.")
         st.stop()
 
     st.chat_message("user").write(prompt)
